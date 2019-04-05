@@ -230,9 +230,11 @@ HRESULT DeleteFileProgressSink::ResumeTimer() {
   return S_OK;
 }
 
-void OpenExternalOnWorkerThread(const GURL& url,
-                                const OpenExternalOptions& options) {
-  base::ScopedBlockingCall scoped_blocking_call(base::BlockingType::MAY_BLOCK);
+std::string OpenExternalOnWorkerThread(
+    const GURL& url,
+    const platform_util::OpenExternalOptions& options) {
+  base::ScopedBlockingCall scoped_blocking_call(FROM_HERE,
+                                                base::BlockingType::MAY_BLOCK);
   // Quote the input scheme to be sure that the command does not have
   // parameters unexpected by the external program. This url should already
   // have been escaped.
@@ -240,13 +242,12 @@ void OpenExternalOnWorkerThread(const GURL& url,
   auto working_dir = options.working_dir.value();
 
   if (reinterpret_cast<ULONG_PTR>(
-          ShellExecuteW(nullptr, "open", escaped_url.c_str(), nullptr,
+          ShellExecuteA(nullptr, "open", escaped_url.c_str(), nullptr,
                         working_dir.empty() ? nullptr : working_dir.c_str(),
                         SW_SHOWNORMAL)) <= 32) {
-    // On failure, it may be good to display a message to the user.
-    // https://crbug.com/727913
-    return;
+    return "Failed to open";
   }
+  return "";
 }
 
 void ShowItemInFolderOnWorkerThread(const base::FilePath& full_path) {
@@ -323,13 +324,12 @@ bool OpenItem(const base::FilePath& full_path) {
 void OpenExternal(const GURL& url,
                   const OpenExternalOptions& options,
                   OpenExternalCallback callback) {
-  // TODO(gabriel): Implement async open if callback is specified
-  std::move(callback).Run(
+  base::PostTaskAndReplyWithResult(
       base::CreateCOMSTATaskRunnerWithTraits(
           {base::MayBlock(), base::TaskPriority::USER_BLOCKING})
-          ->PostTask(FROM_HERE,
-                     base::BindOnce(&OpenExternalOnWorkerThread, url, options));
-      ? "" : "Failed to open");
+          .get(),
+      FROM_HERE, base::BindOnce(&OpenExternalOnWorkerThread, url, options),
+      std::move(callback));
 }
 
 bool MoveItemToTrash(const base::FilePath& path) {
